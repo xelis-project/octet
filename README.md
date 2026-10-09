@@ -9,7 +9,8 @@ errors that retain their concrete causes and context through nested values.
 - Serialize to bytes or write directly to a `Writable` sink.
 - Decode from borrowed slices, owned buffers, or `std::io::Read` sources.
 - Trace failures through types, fields, collection indices, and decoding offsets.
-- Use built-in implementations for integers, strings, options, and vectors.
+- Use built-in implementations for primitives, strings, options, boxes, byte arrays,
+  vectors, and B-tree collections.
 
 ## Installation
 
@@ -17,7 +18,7 @@ Add Octet to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-octet = "0.1.0"
+octet = "0.1.1"
 ```
 
 ## Quick start
@@ -122,12 +123,18 @@ failures, or downcast to the original source or sink error type.
 | Type | Encoding |
 | --- | --- |
 | `u8` | One byte |
-| `u16`, `u32`, `u64`, `i64` | Fixed-width, big-endian bytes |
+| `u16`, `u32`, `u64`, `u128`, `i16`, `i32`, `i64`, `i128` | Fixed-width, big-endian bytes |
+| `f32`, `f64` | Fixed-width, big-endian IEEE 754 bits, preserving NaN payloads and signed zero |
+| `char` | Unicode scalar value as a big-endian `u32`; invalid scalars are rejected |
 | `bool` | One-byte tag: `0` for false, `1` for true |
 | `VarUint` | Values up to 252 use one byte; larger values use a prefix (`0xFD`, `0xFE`, or `0xFF`) followed by a big-endian `u16`, `u32`, or `u64` |
 | `String` | UTF-8 byte length as `VarUint`, followed by UTF-8 bytes |
 | `Option<T>` | One-byte tag: `0` for `None`, `1` followed by the value for `Some` |
 | `Vec<T>` | Element count as `VarUint`, followed by each element |
+| `[u8; N]` | Exactly N raw bytes without a length prefix |
+| `Box<T>` | Same encoding as the inner value |
+| `BTreeMap<K, V>` | Entry count as `VarUint`, followed by key/value pairs in key order |
+| `BTreeSet<T>` | Element count as `VarUint`, followed by elements in order |
 | `()` | No bytes |
 | `&[u8]`, `bytes::Bytes`, `SerializedBytes` | Raw bytes without a length prefix |
 
@@ -136,6 +143,9 @@ bounded source when embedding them in a larger message. Borrowed `&[u8]` values
 support encoding only. `from_bytes()` decodes one value and does not reject
 trailing bytes; use a slice reader and check `remaining()` when full consumption
 is required.
+
+B-tree decoding accepts entries in any order but rejects duplicate map keys
+and set elements.
 
 ## Optional features
 
