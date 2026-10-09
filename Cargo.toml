@@ -1,6 +1,6 @@
 [package]
 name = "octet"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Binary serialization with fallible byte sources, sinks, and contextual errors"
 readme = "README.md"
@@ -10,6 +10,7 @@ keywords = ["binary", "serialization", "bytes", "fallible", "error"]
 
 [dependencies]
 bytes = "1.11.1"
+hex = "0.4.3"
 matriochka = "0.1.0"
 runtime-context = "0.1.3"
 serde = { version = "1", features = ["derive"], optional = true }

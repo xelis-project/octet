@@ -40,6 +40,19 @@ pub trait Serializable: Sized {
         Ok(SerializedBytes::Owned(writer.into_inner().into_boxed_slice()))
     }
 
+    /// Serialize to a lowercase hexadecimal string without a prefix.
+    fn to_hex(&self) -> Result<String, Error> {
+        self.to_bytes().map(hex::encode)
+    }
+
+    /// Deserialize from hexadecimal, rejecting invalid hex and trailing bytes.
+    /// Accepts uppercase and lowercase digits without a prefix or whitespace.
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Error> {
+        hex::decode(hex)
+            .with_context(|| format!("decoding hex for {}", type_name::<Self>()))
+            .and_then(Self::from_bytes)
+    }
+
     /// Deserialize from bytes, rejecting trailing bytes after the value.
     fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Self, Error> {
         let mut reader = Reader::new(bytes.as_ref());
@@ -91,5 +104,37 @@ impl<'a, T: Serializable> Serializable for &'a T {
 
     fn size(&self) -> usize {
         (*self).size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_round_trips_serialized_values() {
+        assert_eq!(0xabcdu16.to_hex().unwrap(), "abcd");
+        assert_eq!(u16::from_hex("ABcd").unwrap(), 0xabcd);
+        let value = Some(vec![1u64, 2, 3]);
+        assert_eq!(Option::<Vec<u64>>::from_hex(value.to_hex().unwrap()).unwrap(), value);
+        assert_eq!(().to_hex().unwrap(), "");
+        assert_eq!(<()>::from_hex("").unwrap(), ());
+    }
+
+    #[test]
+    fn from_hex_rejects_trailing_and_truncated_bytes() {
+        let error = u8::from_hex("2a63").unwrap_err();
+        assert!(matches!(error.downcast_ref::<DecodeError>(), Some(DecodeError::TrailingBytes(1))));
+        let error = u16::from_hex("2a").unwrap_err();
+        assert!(matches!(error.downcast_ref::<DecodeError>(), Some(DecodeError::OutOfBounds { .. })));
+    }
+
+    #[test]
+    fn from_hex_preserves_invalid_hex_errors() {
+        for input in ["a", "gg", "0x2a", "2a "] {
+            let error = u8::from_hex(input).unwrap_err();
+            assert!(error.downcast_ref::<hex::FromHexError>().is_some());
+            assert!(format!("{error:#}").contains("decoding hex for u8"));
+        }
     }
 }
