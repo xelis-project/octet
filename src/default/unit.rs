@@ -1,7 +1,7 @@
-use crate::{Error, Readable, Reader, Serializable, Writable};
+use crate::{Error, Readable, Reader, Serializable, Writable, Writer};
 
 impl Serializable for () {
-    fn write<W: Writable>(&self, _writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, _writer: &mut Writer<W>) -> Result<(), Error> {
         Ok(())
     }
 

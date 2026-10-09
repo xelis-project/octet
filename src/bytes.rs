@@ -2,7 +2,7 @@ use std::{borrow::Borrow, cmp::Ordering, hash::{Hash, Hasher}, ops::Deref};
 
 use bytes::Bytes;
 
-use crate::{Readable, Reader, Error, Serializable, Writable};
+use crate::{Readable, Reader, Error, Serializable, Writable, Writer};
 
 #[derive(Debug, Clone)]
 pub enum SerializedBytes<'a> {
@@ -183,7 +183,7 @@ impl<'a> Serializable for SerializedBytes<'a> {
     }
 
     #[inline]
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| writer.extend_bytes(self.as_ref()))
     }
 

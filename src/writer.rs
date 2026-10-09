@@ -1,21 +1,9 @@
+use crate::Context;
 use matriochka::{Error, ResultExt};
-use std::any::type_name;
+use std::{any::type_name, ops::{Deref, DerefMut}};
 
 /// Trait for writing serialized data to a byte buffer or stream
 pub trait Writable {
-    /// Attach the serialized object's type to any error.
-    /// Use this around custom `Serializable::write` implementations, and add
-    /// field names with Matriochka's `context` at each nested write.
-    fn write_with_context<T>(
-        &mut self,
-        write: impl FnOnce(&mut Self) -> Result<(), Error>,
-    ) -> Result<(), Error>
-    where
-        Self: Sized,
-    {
-        write(self).with_context(|| format!("writing {}", type_name::<T>()))
-    }
-
     /// Write a single byte to the output
     #[inline(always)]
     fn push(&mut self, byte: u8) -> Result<(), Error> {
@@ -34,6 +22,96 @@ pub trait Writable {
     }
 }
 
+/// Writer carrying mutable application data through every nested serializer.
+pub struct Writer<'ty, 'r, W> {
+    sink: W,
+    context: Option<Context<'ty, 'r>>,
+}
+
+impl<'ty, 'r, W: Writable> Writer<'ty, 'r, W> {
+    pub fn new(sink: W) -> Self {
+        Self { sink, context: None }
+    }
+
+    pub fn with_context(sink: W, context: impl Into<Option<Context<'ty, 'r>>>) -> Self {
+        Self { sink, context: context.into() }
+    }
+
+    /// Inspect the context without initializing it.
+    pub fn context(&self) -> Option<&Context<'ty, 'r>> {
+        self.context.as_ref()
+    }
+
+    /// Initialize the context on first mutable access.
+    pub fn context_mut(&mut self) -> &mut Context<'ty, 'r> {
+        self.context.get_or_insert_with(Context::new)
+    }
+
+    pub fn into_inner(self) -> W {
+        self.sink
+    }
+
+    /// Recover the sink and context, retaining changes made while encoding.
+    pub fn into_parts(self) -> (W, Option<Context<'ty, 'r>>) {
+        (self.sink, self.context)
+    }
+
+    /// Attach the serialized object's type to any error.
+    /// Use this around custom `Serializable::write` implementations, and add
+    /// field names with Matriochka's `context` at each nested write.
+    pub fn write_with_context<T>(
+        &mut self,
+        write: impl FnOnce(&mut Self) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        write(self).with_context(|| format!("writing {}", type_name::<T>()))
+    }
+
+}
+
+impl<W> Deref for Writer<'_, '_, W> {
+    type Target = W;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.sink
+    }
+}
+
+impl<W> DerefMut for Writer<'_, '_, W> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sink
+    }
+}
+
+impl<W> AsRef<W> for Writer<'_, '_, W> {
+    #[inline]
+    fn as_ref(&self) -> &W {
+        &self.sink
+    }
+}
+
+impl<W> AsMut<W> for Writer<'_, '_, W> {
+    #[inline]
+    fn as_mut(&mut self) -> &mut W {
+        &mut self.sink
+    }
+}
+
+impl<W: Writable + ?Sized> Writable for &mut W {
+    fn extend_bytes(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        (**self).extend_bytes(bytes)
+    }
+
+    fn push(&mut self, byte: u8) -> Result<(), Error> {
+        (**self).push(byte)
+    }
+
+    fn pre_allocate(&mut self, additional: usize) -> bool {
+        (**self).pre_allocate(additional)
+    }
+}
+
 impl Writable for Vec<u8> {
     fn extend_bytes(&mut self, bytes: &[u8]) -> Result<(), Error> {
         self.extend_from_slice(bytes);
@@ -49,7 +127,7 @@ impl Writable for Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Serializable, SerializedBytes, VarUint, WritableBytes};
+    use crate::{DecodeError, Readable, Reader, Serializable, SerializedBytes, VarUint, WritableBytes};
     use bytes::Bytes;
     use std::io::{self, Cursor, ErrorKind, Write};
 
@@ -68,7 +146,7 @@ mod tests {
         let mut buffer = [0u8; 32];
         let mut writer = IoWriter(Cursor::new(buffer.as_mut_slice()));
 
-        value.write(&mut writer).unwrap();
+        value.write(&mut Writer::new(&mut writer)).unwrap();
 
         let written = writer.0.position() as usize;
         assert_eq!(written, value.size());
@@ -112,7 +190,7 @@ mod tests {
             interrupt: true,
         });
 
-        value.write(&mut writer).unwrap();
+        value.write(&mut Writer::new(&mut writer)).unwrap();
 
         assert_eq!(writer.0.written, 8);
         assert_eq!(&writer.0.buffer[..8], &value.to_be_bytes());
@@ -122,7 +200,7 @@ mod tests {
         let mut buffer = [];
         let mut writer = IoWriter(Cursor::new(buffer.as_mut_slice()));
 
-        let error = value.write(&mut writer).unwrap_err();
+        let error = value.write(&mut Writer::new(&mut writer)).unwrap_err();
 
         assert_eq!(
             error.downcast_ref::<io::Error>().unwrap().kind(),
@@ -173,7 +251,7 @@ mod tests {
     fn composite_serialization_stops_at_the_first_failed_write() {
         let mut writer = RejectSecondWrite { calls: 0 };
 
-        let error = Some(vec![1u64, 2]).write(&mut writer).unwrap_err();
+        let error = Some(vec![1u64, 2]).write(&mut Writer::new(&mut writer)).unwrap_err();
 
         assert!(error.downcast_ref::<SinkRejected>().is_some());
         assert_eq!(
@@ -189,7 +267,7 @@ mod tests {
         // Leave room for everything except the final byte of the second u64.
         let mut buffer = vec![0; value.size() - 1];
         let mut writer = IoWriter(Cursor::new(buffer.as_mut_slice()));
-        let error = value.write(&mut writer).unwrap_err();
+        let error = value.write(&mut Writer::new(&mut writer)).unwrap_err();
 
         assert_eq!(
             error.downcast_ref::<io::Error>().unwrap().kind(),
@@ -219,12 +297,12 @@ mod tests {
         struct Record;
 
         impl Serializable for Record {
-            fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+            fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
                 writer.write_with_context::<Self>(|writer| 42u64.write(writer).context("account id"))
             }
 
-            fn read<R: crate::Readable>(_: &mut crate::Reader<R>) -> Result<Self, Error> {
-                Err(crate::DecodeError::NotImplemented.into())
+            fn read<R: Readable>(_: &mut Reader<R>) -> Result<Self, Error> {
+                Err(DecodeError::NotImplemented.into())
             }
 
             fn size(&self) -> usize {
@@ -240,7 +318,7 @@ mod tests {
             }
         }
 
-        let error = Record.write(&mut Rejected).unwrap_err();
+        let error = Record.write(&mut Writer::new(Rejected)).unwrap_err();
         assert!(error.downcast_ref::<SinkRejected>().is_some());
         assert_eq!(
             format!("{error:#}"),

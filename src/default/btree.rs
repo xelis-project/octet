@@ -2,10 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use matriochka::ResultExt;
 
-use crate::{DecodeError, Error, Readable, Reader, Serializable, VarUint, Writable};
+use crate::{DecodeError, Error, Readable, Reader, Serializable, VarUint, Writable, Writer};
 
 impl<K: Serializable + Ord, V: Serializable> Serializable for BTreeMap<K, V> {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| {
             VarUint(self.len() as u64).write(writer).context("length")?;
             for (index, (key, value)) in self.iter().enumerate() {
@@ -45,7 +45,7 @@ impl<K: Serializable + Ord, V: Serializable> Serializable for BTreeMap<K, V> {
 }
 
 impl<T: Serializable + Ord> Serializable for BTreeSet<T> {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| {
             VarUint(self.len() as u64).write(writer).context("length")?;
             for (index, item) in self.iter().enumerate() {

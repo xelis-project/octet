@@ -1,9 +1,9 @@
 use matriochka::ResultExt;
 
-use crate::{Error, Readable, Reader, Serializable, SerializedBytes, Writable};
+use crate::{Error, Readable, Reader, Serializable, SerializedBytes, Writable, Writer};
 
 impl<T: Serializable> Serializable for Box<T> {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| self.as_ref().write(writer).context("value"))
     }
 
@@ -23,6 +23,7 @@ impl<T: Serializable> Serializable for Box<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DecodeError;
 
     #[test]
     fn boxes_preserve_inner_encoding_and_borrowed_bytes() {
@@ -31,7 +32,7 @@ mod tests {
         assert_eq!(bytes.as_ref(), value.as_ref().to_bytes().unwrap().as_ref());
         assert_eq!(value.size(), bytes.len());
         let mut written = Vec::new();
-        value.write(&mut written).unwrap();
+        value.write(&mut Writer::new(&mut written)).unwrap();
         assert_eq!(written, bytes.as_ref());
         assert_eq!(Box::<[u8; 5]>::from_bytes(bytes).unwrap(), value);
 
@@ -45,8 +46,8 @@ mod tests {
     fn boxes_preserve_inner_errors_and_context() {
         let error = Box::<char>::from_bytes(0xd800u32.to_be_bytes()).unwrap_err();
         assert!(matches!(
-            error.downcast_ref::<crate::DecodeError>(),
-            Some(crate::DecodeError::UnexpectedValue)
+            error.downcast_ref::<DecodeError>(),
+            Some(DecodeError::UnexpectedValue)
         ));
         let diagnostic = format!("{error:#}");
         assert!(diagnostic.contains("value"));

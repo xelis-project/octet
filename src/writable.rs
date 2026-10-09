@@ -1,9 +1,9 @@
-use crate::{DecodeError, SerializedBytes, Readable, Reader, Error, Serializable, Writable};
+use crate::{DecodeError, SerializedBytes, Readable, Reader, Error, Serializable, Writable, Writer};
 
 pub struct WritableBytes<T: AsRef<[u8]>>(pub T);
 
 impl<T: AsRef<[u8]>> Serializable for WritableBytes<T> {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| writer.extend_bytes(self.0.as_ref()))
     }
 

@@ -1,12 +1,12 @@
 use matriochka::ResultExt;
 
-use crate::{DecodeError, Error, Readable, Reader, Serializable, SerializedBytes, Writable};
+use crate::{DecodeError, Error, Readable, Reader, Serializable, SerializedBytes, Writable, Writer};
 
 macro_rules! impl_serializable_fixed_width {
     ($($ty:ty => $size:expr),+) => {
         $(
             impl Serializable for $ty {
-                fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+                fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
                     writer.write_with_context::<Self>(|writer| {
                         writer.extend_bytes(&self.to_be_bytes())
                     })
@@ -48,7 +48,7 @@ impl_serializable_fixed_width!(
 );
 
 impl Serializable for u8 {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| writer.push(*self))
     }
 
@@ -62,7 +62,7 @@ impl Serializable for u8 {
 }
 
 impl Serializable for bool {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| (*self as u8).write(writer).context("tag"))
     }
 
@@ -80,7 +80,7 @@ impl Serializable for bool {
 }
 
 impl Serializable for char {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| (*self as u32).write(writer).context("scalar"))
     }
 
@@ -119,7 +119,7 @@ mod tests {
             assert_eq!(value.size(), bytes.len());
             assert_eq!(f32::from_bytes(&bytes).unwrap().to_bits(), bits);
             let mut written = Vec::new();
-            value.write(&mut written).unwrap();
+            value.write(&mut Writer::new(&mut written)).unwrap();
             assert_eq!(written, bytes.as_ref());
         }
         for bits in [
@@ -137,7 +137,7 @@ mod tests {
             assert_eq!(value.size(), bytes.len());
             assert_eq!(f64::from_bytes(&bytes).unwrap().to_bits(), bits);
             let mut written = Vec::new();
-            value.write(&mut written).unwrap();
+            value.write(&mut Writer::new(&mut written)).unwrap();
             assert_eq!(written, bytes.as_ref());
         }
         assert!(f32::from_bytes([0; 3]).is_err());

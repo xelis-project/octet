@@ -3,7 +3,7 @@ use matriochka::ResultExt;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use super::{Readable, Reader, Error, Serializable, Writable};
+use super::{Readable, Reader, Error, Serializable, Writable, Writer};
 
 /// Variable-length integer encoding for usize values
 /// Uses 1, 2, 4, or 8 bytes depending on the value magnitude
@@ -64,7 +64,7 @@ impl From<VarUint> for usize {
 }
 
 impl Serializable for VarUint {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| {
             let value = self.0;
 

@@ -17,7 +17,8 @@ mod bytes;
 use std::any::type_name;
 use matriochka::Error;
 
-pub use writer::Writable;
+pub use writer::{Writable, Writer};
+pub use runtime_context::{self, Context};
 pub use reader::{DecodeError, Readable, Reader, SliceSource};
 pub use writable::WritableBytes;
 pub use varuint::VarUint;
@@ -29,14 +30,14 @@ pub trait Serializable: Sized {
     /// On failure the sink may contain a partially serialized value.
     /// Wrap custom implementations in `writer.write_with_context::<Self>(...)`
     /// and attach field names with Matriochka's `ResultExt::context`.
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error>;
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error>;
 
     /// Serialize to bytes
     fn to_bytes<'a>(&'a self) -> Result<SerializedBytes<'a>, Error> {
-        let mut buffer = Vec::with_capacity(self.size());
-        self.write(&mut buffer)
+        let mut writer = Writer::new(Vec::with_capacity(self.size()));
+        self.write(&mut writer)
             .with_context(|| format!("serializing {}", type_name::<Self>()))?;
-        Ok(SerializedBytes::Owned(buffer.into_boxed_slice()))
+        Ok(SerializedBytes::Owned(writer.into_inner().into_boxed_slice()))
     }
 
     /// Deserialize from bytes
@@ -61,7 +62,7 @@ pub trait Serializable: Sized {
 }
 
 impl<'a, T: Serializable> Serializable for &'a T {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         (*self).write(writer)
     }
 

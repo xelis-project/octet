@@ -1,9 +1,9 @@
 use crate::VarUint;
-use crate::{Error, Readable, Reader, Serializable, Writable};
+use crate::{Error, Readable, Reader, Serializable, Writable, Writer};
 use matriochka::ResultExt;
 
 impl Serializable for String {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| {
             // Write length as VarInt, then raw UTF-8 bytes
             VarUint(self.len() as u64).write(writer).context("length")?;

@@ -1,9 +1,9 @@
 use crate::SerializedBytes;
-use crate::{Error, Readable, Reader, Serializable, Writable};
+use crate::{Error, Readable, Reader, Serializable, Writable, Writer};
 use ::bytes::Bytes;
 
 impl Serializable for Bytes {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| writer.extend_bytes(self.as_ref()))
     }
 

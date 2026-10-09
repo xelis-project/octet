@@ -1,3 +1,4 @@
+use crate::Context;
 use matriochka::ResultExt;
 
 use std::{
@@ -72,14 +73,35 @@ impl Readable for SliceSource<'_> {
 }
 
 /// Reader for deserializing from any fallible byte source.
-pub struct Reader<R> {
+pub struct Reader<'ty, 'r, R> {
+    context: Option<Context<'ty, 'r>>,
     source: R,
     total: usize,
 }
 
-impl<R: Readable> Reader<R> {
+impl<'ty, 'r, R: Readable> Reader<'ty, 'r, R> {
     pub fn from_source(source: R) -> Self {
-        Self { source, total: 0 }
+        Self { source, total: 0, context: None }
+    }
+
+    /// Create a reader with application data shared by every nested decoder.
+    pub fn with_context(source: R, context: impl Into<Option<Context<'ty, 'r>>>) -> Self {
+        Self { source, total: 0, context: context.into() }
+    }
+
+    /// Inspect the context without initializing it.
+    pub fn context(&self) -> Option<&Context<'ty, 'r>> {
+        self.context.as_ref()
+    }
+
+    /// Initialize the context on first mutable access.
+    pub fn context_mut(&mut self) -> &mut Context<'ty, 'r> {
+        self.context.get_or_insert_with(Context::new)
+    }
+
+    /// Recover the source and context, retaining any changes made while decoding.
+    pub fn into_parts(self) -> (R, Option<Context<'ty, 'r>>) {
+        (self.source, self.context)
     }
 
     pub fn into_inner(self) -> R {
@@ -201,7 +223,7 @@ impl<R: Readable> Reader<R> {
     }
 }
 
-impl<'a> Reader<SliceSource<'a>> {
+impl<'ty, 'r, 'a> Reader<'ty, 'r, SliceSource<'a>> {
     /// Create a reader from a byte slice or owned byte vector.
     pub fn new(data: impl Into<Cow<'a, [u8]>>) -> Self {
         Self::from_source(SliceSource {

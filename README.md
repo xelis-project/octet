@@ -6,7 +6,7 @@ Octet provides an explicit `Serializable` trait for defining how values are
 encoded and decoded. Use it with in-memory buffers or custom I/O adapters, with
 errors that retain their concrete causes and context through nested values.
 
-- Serialize to bytes or write directly to a `Writable` sink.
+- Serialize to bytes or wrap a `Writable` sink in a context-carrying `Writer`.
 - Decode from borrowed slices, owned buffers, or `std::io::Read` sources.
 - Trace failures through types, fields, collection indices, and decoding offsets.
 - Use built-in implementations for primitives, strings, options, boxes, byte arrays,
@@ -51,7 +51,7 @@ context helpers directly.
 
 ```rust
 use matriochka::{Error, ResultExt};
-use octet::{Readable, Reader, Serializable, Writable};
+use octet::{Readable, Reader, Serializable, Writable, Writer};
 
 #[derive(Debug, PartialEq)]
 struct Record {
@@ -60,7 +60,7 @@ struct Record {
 }
 
 impl Serializable for Record {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| {
             self.id.write(writer).context("id")?;
             self.name.write(writer).context("name")
@@ -102,10 +102,21 @@ assert_eq!(u64::read(&mut reader)?, value);
 # Ok::<(), matriochka::Error>(())
 ```
 
-For output, `Vec<u8>` implements `Writable`. Implement `Writable::extend_bytes`
+For output, `Vec<u8>` implements `Writable`; wrap it with `Writer::new(buffer)`
+and pass the writer to `Serializable::write`. Implement `Writable::extend_bytes`
 to support another destination; an adapter for `std::io::Write` can forward to
 `write_all` and convert errors with `matriochka::Error::new`. A failed write may
 leave a partially serialized value in the destination.
+
+## Runtime data
+
+Every nested serializer receives the same `Writer` or `Reader`. Access application
+state with `context()` and `context_mut()`. Both use `runtime_context::Context`,
+re-exported as `octet::Context`, and support owned values and borrowed references.
+To provide context, create a reader or writer with `Reader::with_context` or
+`Writer::with_context`, then call `Serializable::read` or `Serializable::write`.
+Default readers and writers initialize context only on the first `context_mut()`
+call; `context()` inspects it without initialization.
 
 ## Error handling
 

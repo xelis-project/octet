@@ -1,9 +1,9 @@
 use crate::DecodeError;
-use crate::{Error, Readable, Reader, Serializable, Writable};
+use crate::{Error, Readable, Reader, Serializable, Writable, Writer};
 use matriochka::ResultExt;
 
 impl<T: Serializable> Serializable for Option<T> {
-    fn write<W: Writable>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         writer.write_with_context::<Self>(|writer| match self {
             Some(value) => {
                 1u8.write(writer).context("tag")?;
