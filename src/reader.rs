@@ -21,6 +21,8 @@ pub enum DecodeError {
     OutOfBounds { requested: usize, available: usize },
     #[error("Failed to convert bytes")]
     ErrorTryInto,
+    #[error("{0} trailing bytes after decoded value")]
+    TrailingBytes(usize),
 }
 
 impl From<DecodeError> for matriochka::Error {
@@ -270,6 +272,30 @@ impl<'ty, 'r, 'a> Reader<'ty, 'r, SliceSource<'a>> {
 mod tests {
     use super::*;
     use crate::{Serializable, SerializedBytes};
+
+    #[test]
+    fn from_bytes_rejects_trailing_bytes() {
+        let error = u8::from_bytes([42, 99]).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<DecodeError>(),
+            Some(DecodeError::TrailingBytes(1))
+        ));
+        assert!(format!("{error:#}").eq("1 trailing bytes after decoded value"));
+        assert_eq!(u8::from_bytes([42]).unwrap(), 42);
+        assert_eq!(<()>::from_bytes([]).unwrap(), ());
+        assert!(<()>::from_bytes([99]).is_err());
+        assert_eq!(Vec::<u8>::from_bytes([2, 42, 99]).unwrap(), vec![42, 99]);
+    }
+
+    #[test]
+    fn from_bytes_non_strict_allows_trailing_bytes() {
+        assert_eq!(u8::from_bytes_non_strict([42, 99]).unwrap(), 42);
+        assert_eq!(<()>::from_bytes_non_strict([99]).unwrap(), ());
+        assert_eq!(Vec::<u8>::from_bytes_non_strict([2, 42, 99, 100]).unwrap(), vec![42, 99]);
+        let error = u16::from_bytes_non_strict([42]).unwrap_err();
+        assert!(matches!(error.downcast_ref::<DecodeError>(), Some(DecodeError::OutOfBounds { .. })));
+        assert!(format!("{error:#}").contains("deserializing u16 at byte 0"));
+    }
 
     #[test]
     fn deserialization_errors_preserve_type_and_offset_context() {

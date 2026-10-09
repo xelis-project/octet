@@ -40,8 +40,27 @@ pub trait Serializable: Sized {
         Ok(SerializedBytes::Owned(writer.into_inner().into_boxed_slice()))
     }
 
-    /// Deserialize from bytes
+    /// Deserialize from bytes, rejecting trailing bytes after the value.
     fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Self, Error> {
+        let mut reader = Reader::new(bytes.as_ref());
+        let value = Self::read(&mut reader)
+            .with_context(|| {
+                format!(
+                    "deserializing {} at byte {}",
+                    type_name::<Self>(),
+                    reader.total_read(),
+                )
+            })?;
+
+            if reader.has_more() {
+                return Err(DecodeError::TrailingBytes(reader.remaining()).into())
+            }
+
+            Ok(value)
+    }
+
+    /// Deserialize one value from bytes, allowing trailing bytes.
+    fn from_bytes_non_strict<T: AsRef<[u8]>>(bytes: T) -> Result<Self, Error> {
         let mut reader = Reader::new(bytes.as_ref());
         Self::read(&mut reader).with_context(|| {
             format!(
