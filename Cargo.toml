@@ -5,6 +5,8 @@ edition = "2024"
 description = "Binary serialization with fallible byte sources, sinks, and contextual errors"
 readme = "README.md"
 authors = ["Slixe <slixeprivate@gmail.com>"]
+license = "MIT"
+keywords = ["binary", "serialization", "bytes", "fallible", "error"]
 
 [dependencies]
 bytes = "1.11.1"
