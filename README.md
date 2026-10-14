@@ -42,6 +42,42 @@ obtain a `Vec<u8>`.
 
 ## Custom types
 
+Use `#[derive(Serializable)]` to generate implementations for structs and enums:
+
+```rust
+use octet::Serializable;
+
+#[derive(Debug, PartialEq, Serializable)]
+struct Record<T> {
+    id: u64,
+    value: T,
+}
+
+let record = Record { id: 42, value: String::from("hello") };
+let bytes = record.to_bytes()?;
+assert_eq!(Record::<String>::from_bytes(bytes)?, record);
+# Ok::<(), octet::Error>(())
+```
+
+The derive supports named, tuple, and unit structs and enum variants, and adds
+`Serializable` bounds for field types while preserving existing generic bounds.
+Fields are encoded in declaration order. Enums encode a zero-based `VarUint`
+variant index followed by the variant's fields; explicit Rust discriminants do
+not change these tags. Reordering fields or variants changes the binary format.
+Errors include type, variant, and field context (tuple fields use their index).
+Unions are unsupported. No additional dependency is needed to use the derive.
+
+Fields without a `Serializable` implementation are rejected at compile time:
+
+```rust,compile_fail
+use octet::Serializable;
+
+struct Unsupported;
+
+#[derive(Serializable)]
+struct Record { value: Unsupported }
+```
+
 Implement `write`, `read`, and `size` to define a type's binary layout. Read
 fields in the same order they are written, and return the estimated serialized
 size from `size`.

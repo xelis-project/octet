@@ -5,6 +5,8 @@
 
 #![doc = include_str!("../README.md")]
 
+extern crate self as octet;
+
 use matriochka::ResultExt;
 
 mod writer;
@@ -15,7 +17,13 @@ mod varuint;
 mod bytes;
 
 use std::any::type_name;
-use matriochka::Error;
+pub use matriochka::Error;
+pub use octet_derive::Serializable;
+
+#[doc(hidden)]
+pub mod __private {
+    pub use matriochka::ResultExt;
+}
 
 pub use writer::{Writable, Writer};
 pub use runtime_context::{self, Context};
