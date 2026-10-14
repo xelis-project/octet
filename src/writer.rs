@@ -59,7 +59,7 @@ impl<'ty, 'r, W: Writable> Writer<'ty, 'r, W> {
     /// Attach the serialized object's type to any error.
     /// Use this around custom `Serializable::write` implementations, and add
     /// field names with Matriochka's `context` at each nested write.
-    pub fn write_with_context<T>(
+    pub fn write_with_context<T: ?Sized>(
         &mut self,
         write: impl FnOnce(&mut Self) -> Result<(), Error>,
     ) -> Result<(), Error> {

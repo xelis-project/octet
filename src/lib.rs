@@ -25,7 +25,7 @@ pub use varuint::VarUint;
 pub use bytes::SerializedBytes;
 
 /// Trait for types that can be serialized and deserialized as binary data
-pub trait Serializable: Sized {
+pub trait Serializable {
     /// Serialize directly into a buffer or sink, propagating write errors.
     /// On failure the sink may contain a partially serialized value.
     /// Wrap custom implementations in `writer.write_with_context::<Self>(...)`
@@ -47,14 +47,20 @@ pub trait Serializable: Sized {
 
     /// Deserialize from hexadecimal, rejecting invalid hex and trailing bytes.
     /// Accepts uppercase and lowercase digits without a prefix or whitespace.
-    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Error> {
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Error>
+    where
+        Self: Sized,
+    {
         hex::decode(hex)
             .with_context(|| format!("decoding hex for {}", type_name::<Self>()))
             .and_then(Self::from_bytes)
     }
 
     /// Deserialize from bytes, rejecting trailing bytes after the value.
-    fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Self, Error> {
+    fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Self, Error>
+    where
+        Self: Sized,
+    {
         let mut reader = Reader::new(bytes.as_ref());
         let value = Self::read(&mut reader)
             .with_context(|| {
@@ -73,7 +79,10 @@ pub trait Serializable: Sized {
     }
 
     /// Deserialize one value from bytes, allowing trailing bytes.
-    fn from_bytes_non_strict<T: AsRef<[u8]>>(bytes: T) -> Result<Self, Error> {
+    fn from_bytes_non_strict<T: AsRef<[u8]>>(bytes: T) -> Result<Self, Error>
+    where
+        Self: Sized,
+    {
         let mut reader = Reader::new(bytes.as_ref());
         Self::read(&mut reader).with_context(|| {
             format!(
@@ -87,13 +96,15 @@ pub trait Serializable: Sized {
     /// Read an instance of the type from a reader.
     /// Wrap custom implementations in `reader.read_with_context(...)` and attach
     /// field names to nested results with Matriochka's `ResultExt::context`.
-    fn read<R: Readable>(reader: &mut Reader<R>) -> Result<Self, Error>;
+    fn read<R: Readable>(reader: &mut Reader<R>) -> Result<Self, Error>
+    where
+        Self: Sized;
 
     /// Estimate the size of the serialized entity without actually serializing it
     fn size(&self) -> usize;
 }
 
-impl<'a, T: Serializable> Serializable for &'a T {
+impl<'a, T: Serializable + ?Sized> Serializable for &'a T {
     fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
         (*self).write(writer)
     }
@@ -110,6 +121,30 @@ impl<'a, T: Serializable> Serializable for &'a T {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsized_types_can_serialize_directly_and_through_references() {
+        struct UnsizedBytes<T: ?Sized>(T);
+
+        impl Serializable for UnsizedBytes<[u8]> {
+            fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
+                writer.write_with_context::<Self>(|writer| writer.extend_bytes(&self.0))
+            }
+
+            fn size(&self) -> usize {
+                self.0.len()
+            }
+        }
+
+        fn serialize<T: Serializable + ?Sized>(value: &T) -> Vec<u8> {
+            value.to_bytes().unwrap().as_ref().to_vec()
+        }
+
+        let value: &UnsizedBytes<[u8]> = &UnsizedBytes(*b"hello");
+        assert_eq!(serialize(value), b"hello");
+        assert_eq!(serialize(&value), b"hello");
+        assert_eq!(value.to_hex().unwrap(), "68656c6c6f");
+    }
 
     #[test]
     fn hex_round_trips_serialized_values() {
