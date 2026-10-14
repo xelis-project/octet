@@ -18,7 +18,7 @@ Add Octet to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-octet = "0.1.1"
+octet = "0.2.3"
 ```
 
 ## Quick start
