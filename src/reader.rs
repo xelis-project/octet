@@ -1,4 +1,4 @@
-use crate::Context;
+use crate::{Context, BytesView};
 use matriochka::ResultExt;
 
 use std::{
@@ -36,6 +36,30 @@ impl From<DecodeError> for matriochka::Error {
 pub trait Readable {
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Error>;
 
+    /// Append unread bytes until EOF. Empty input succeeds without adding bytes.
+    /// On failure, the buffer retains any bytes successfully read before the error.
+    fn read_to_end(&mut self, bytes: &mut Vec<u8>) -> Result<(), Error> {
+        let mut buffer = [0; 4096];
+        loop {
+            let count = self.read(&mut buffer)?;
+            if count > buffer.len() {
+                return Err(DecodeError::UnexpectedValue.into());
+            }
+
+            if count == 0 {
+                return Ok(());
+            }
+
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+    }
+
+    /// View unread bytes without consuming input, if supported by the source.
+    /// The returned view may borrow from the source and must not require reading it.
+    fn bytes_ref<'a>(&'a self) -> Option<BytesView<'a>> {
+        None
+    }
+
     /// Known remaining length, if available without reading from the source.
     fn remaining(&self) -> Option<usize> {
         None
@@ -51,6 +75,13 @@ impl<R: Read> Readable for R {
                     return result.map_err(Error::new);
                 }
             }
+        }
+    }
+
+    fn read_to_end(&mut self, bytes: &mut Vec<u8>) -> Result<(), Error> {
+        match Read::read_to_end(self, bytes) {
+            Ok(_) => Ok(()),
+            Err(error) => Err(Error::new(error)),
         }
     }
 }
@@ -69,6 +100,16 @@ impl Readable for SliceSource<'_> {
         Ok(count)
     }
 
+    fn read_to_end(&mut self, bytes: &mut Vec<u8>) -> Result<(), Error> {
+        bytes.extend_from_slice(&self.data[self.offset..]);
+        self.offset = self.data.len();
+        Ok(())
+    }
+
+    fn bytes_ref<'a>(&'a self) -> Option<BytesView<'a>> {
+        Some(BytesView::Borrowed(&self.data[self.offset..]))
+    }
+
     fn remaining(&self) -> Option<usize> {
         Some(self.data.len() - self.offset)
     }
@@ -82,6 +123,7 @@ pub struct Reader<'ty, 'r, R> {
 }
 
 impl<'ty, 'r, R: Readable> Reader<'ty, 'r, R> {
+    /// Create a reader without application context. Use `with_context` to share
     pub fn from_source(source: R) -> Self {
         Self { source, total: 0, context: None }
     }
@@ -106,12 +148,19 @@ impl<'ty, 'r, R: Readable> Reader<'ty, 'r, R> {
         (self.source, self.context)
     }
 
+    /// Recover the source, discarding any context changes made while decoding.
     pub fn into_inner(self) -> R {
         self.source
     }
 
+    /// Return the total number of bytes successfully read from the source.
     pub fn total_read(&self) -> usize {
         self.total
+    }
+
+    /// View unread bytes without advancing the reader, if supported by the source.
+    pub fn bytes_ref<'a>(&'a self) -> Option<BytesView<'a>> {
+        self.source.bytes_ref()
     }
 
     /// Attach the decoded object's type and failure offset to any error.
@@ -197,31 +246,13 @@ impl<'ty, 'r, R: Readable> Reader<'ty, 'r, R> {
             .with_context(|| format!("trying to convert {n} bytes"))
     }
 
-    /// Read an unframed value until EOF. Use a bounded source for embedded values.
-    pub fn read_remaining_bytes(&mut self) -> Result<Vec<u8>, Error> {
-        let mut bytes = Vec::new();
-        let mut buffer = [0; 4096];
-        loop {
-            let count = self
-                .source
-                .read(&mut buffer)
-                .with_context(|| format!("reading source at byte {}", self.total))?;
-            if count > buffer.len() {
-                return Err(DecodeError::UnexpectedValue.into());
-            }
-            if count == 0 {
-                break;
-            }
-            self.total += count;
-            bytes.extend_from_slice(&buffer[..count]);
-        }
-        if bytes.is_empty() {
-            return Err(DecodeError::OutOfBounds {
-                requested: 1,
-                available: 0,
-            }.into());
-        }
-        Ok(bytes)
+    /// Append unread bytes until EOF, tracking bytes consumed even on failure.
+    /// Existing buffer contents are preserved and excluded from `total_read()`.
+    pub fn read_to_end(&mut self, bytes: &mut Vec<u8>) -> Result<(), Error> {
+        let initial_len = bytes.len();
+        let result = self.source.read_to_end(bytes);
+        self.total += bytes.len() - initial_len;
+        result.with_context(|| format!("reading source at byte {}", self.total))
     }
 }
 
@@ -271,7 +302,7 @@ impl<'ty, 'r, 'a> Reader<'ty, 'r, SliceSource<'a>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Serializable, SerializedBytes};
+    use crate::{Serializable, BytesView};
 
     #[test]
     fn from_bytes_rejects_trailing_bytes() {
@@ -432,6 +463,51 @@ mod tests {
         assert_eq!(reader.bytes(), &bytes);
     }
 
+    #[test]
+    fn bytes_ref_borrows_unread_bytes_without_advancing() {
+        fn check<R: Readable>(mut reader: Reader<R>, original: *const u8) {
+            let view = reader.bytes_ref().unwrap();
+            assert!(matches!(view, BytesView::Borrowed(_)));
+            assert_eq!(view.as_ref(), &[1, 2, 3]);
+            assert_eq!(view.as_ptr(), original);
+            assert_eq!(reader.total_read(), 0);
+            drop(view);
+
+            assert_eq!(reader.next_byte().unwrap(), 1);
+            let view = reader.bytes_ref().unwrap();
+            assert_eq!(view.as_ref(), &[2, 3]);
+            assert_eq!(view.as_ptr(), original.wrapping_add(1));
+            assert_eq!(reader.total_read(), 1);
+            drop(view);
+
+            assert_eq!(reader.read_vec(2).unwrap(), [2, 3]);
+            let view = reader.bytes_ref().unwrap();
+            assert!(matches!(view, BytesView::Borrowed(_)));
+            assert!(view.is_empty());
+            assert_eq!(reader.total_read(), 3);
+        }
+
+        let bytes = [1, 2, 3];
+        check(Reader::new(bytes.as_slice()), bytes.as_ptr());
+        let bytes = bytes.to_vec();
+        let original = bytes.as_ptr();
+        check(Reader::new(bytes), original);
+    }
+
+    #[test]
+    fn bytes_ref_is_optional_for_streams_and_custom_sources() {
+        let mut reader = Reader::from_source(std::io::Cursor::new([1, 2, 3]));
+        assert!(reader.bytes_ref().is_none());
+        assert_eq!(reader.total_read(), 0);
+        assert_eq!(reader.next_byte().unwrap(), 1);
+        assert!(reader.bytes_ref().is_none());
+        assert_eq!(reader.total_read(), 1);
+
+        let reader = Reader::from_source(UnavailableSource);
+        assert!(reader.bytes_ref().is_none());
+        assert_eq!(reader.total_read(), 0);
+    }
+
     #[derive(Debug, thiserror::Error)]
     #[error("source unavailable")]
     struct SourceUnavailable;
@@ -465,7 +541,126 @@ mod tests {
             interrupt: false,
         });
 
-        assert_eq!(SerializedBytes::read(&mut reader).unwrap().as_ref(), bytes);
+        assert_eq!(BytesView::read(&mut reader).unwrap().as_ref(), bytes);
         assert_eq!(reader.total_read(), bytes.len());
+    }
+
+    #[test]
+    fn read_to_end_accepts_empty_input_and_repeated_eof() {
+        fn check<R: Readable>(mut reader: Reader<R>) {
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.is_empty());
+            reader.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.is_empty());
+            assert_eq!(reader.total_read(), 0);
+        }
+
+        check(Reader::new(&[][..]));
+        check(Reader::from_source(std::io::Cursor::new([])));
+
+        let empty = BytesView::Borrowed(&[]);
+        let encoded = Serializable::to_bytes(&empty).unwrap();
+        assert!(BytesView::from_bytes(encoded).unwrap().is_empty());
+        let empty = ::bytes::Bytes::new();
+        let encoded = empty.to_bytes().unwrap();
+        assert!(::bytes::Bytes::from_bytes(encoded).unwrap().is_empty());
+    }
+
+    #[test]
+    fn read_to_end_consumes_only_unread_input() {
+        fn check<R: Readable>(mut reader: Reader<R>) {
+            assert_eq!(reader.next_byte().unwrap(), 1);
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, [2, 3]);
+            assert_eq!(reader.total_read(), 3);
+            reader.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, [2, 3]);
+            assert_eq!(reader.total_read(), 3);
+        }
+
+        check(Reader::new(&[1, 2, 3][..]));
+        check(Reader::new(vec![1, 2, 3]));
+        check(Reader::from_source(std::io::Cursor::new([1, 2, 3])));
+        check(Reader::from_source(FragmentedSource {
+            bytes: std::io::Cursor::new(vec![1, 2, 3]),
+            interrupt: true,
+        }));
+    }
+
+    struct PrefixThenError {
+        prefix: &'static [u8],
+    }
+
+    impl Readable for PrefixThenError {
+        fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Error> {
+            if self.prefix.is_empty() {
+                return UnavailableSource.read(buffer);
+            }
+            Read::read(&mut self.prefix, buffer).map_err(Error::new)
+        }
+    }
+
+    #[test]
+    fn read_to_end_appends_and_retains_partial_input_on_error() {
+        let mut bytes = vec![9];
+        let mut reader = Reader::new(&[1, 2, 3][..]);
+        assert_eq!(reader.next_byte().unwrap(), 1);
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, [9, 2, 3]);
+        assert_eq!(reader.total_read(), 3);
+        assert_eq!(reader.remaining(), 0);
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, [9, 2, 3]);
+        assert_eq!(reader.total_read(), 3);
+
+        let source = PrefixThenError { prefix: &[4, 5] };
+        let mut reader = Reader::from_source(source);
+        let error = reader.read_to_end(&mut bytes).unwrap_err();
+        assert!(error.downcast_ref::<SourceUnavailable>().is_some());
+        assert!(format!("{error:#}").contains("reading source at byte 2"));
+        assert_eq!(bytes, [9, 2, 3, 4, 5]);
+        assert_eq!(reader.total_read(), 2);
+    }
+
+    #[test]
+    fn source_read_to_end_preserves_existing_buffer_contents() {
+        let mut bytes = vec![9];
+        let mut source = Reader::new(&[1, 2, 3][..]).into_inner();
+        source.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, [9, 1, 2, 3]);
+        assert_eq!(source.remaining(), Some(0));
+
+        let mut source = PrefixThenError { prefix: &[4, 5] };
+        let error = source.read_to_end(&mut bytes).unwrap_err();
+        assert!(error.downcast_ref::<SourceUnavailable>().is_some());
+        assert_eq!(bytes, [9, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn byte_decoding_preserves_partial_failure_offsets_and_causes() {
+        fn check<R: Readable>(source: R) -> Error {
+            let mut reader = Reader::from_source(source);
+            let error = BytesView::read(&mut reader).unwrap_err();
+            assert_eq!(reader.total_read(), 3);
+            assert!(format!("{error:#}").contains("reading source at byte 3"));
+            error
+        }
+
+        let error = check(PrefixThenError { prefix: &[1, 2, 3] });
+        assert!(error.downcast_ref::<SourceUnavailable>().is_some());
+
+        struct IoFailure;
+
+        impl Read for IoFailure {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("source unavailable"))
+            }
+        }
+
+        let source = Read::chain(std::io::Cursor::new([1, 2, 3]), IoFailure);
+        let error = check(source);
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
     }
 }

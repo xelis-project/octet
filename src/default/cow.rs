@@ -1,4 +1,4 @@
-use crate::SerializedBytes;
+use crate::BytesView;
 use crate::{Error, Readable, Reader, Serializable, Writable, Writer};
 use matriochka::ResultExt;
 use std::borrow::Cow;
@@ -16,7 +16,7 @@ impl<'a, T: Serializable + Clone> Serializable for Cow<'a, T> {
     }
 
     #[inline]
-    fn to_bytes<'b>(&'b self) -> Result<SerializedBytes<'b>, Error> {
+    fn to_bytes<'b>(&'b self) -> Result<BytesView<'b>, Error> {
         self.as_ref().to_bytes()
     }
 

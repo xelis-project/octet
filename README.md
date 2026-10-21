@@ -36,7 +36,7 @@ fn main() -> Result<(), matriochka::Error> {
 }
 ```
 
-`to_bytes()` returns a `SerializedBytes` value, which supports borrowed, owned,
+`to_bytes()` returns a `BytesView` value, which supports borrowed, owned,
 and shared byte storage. Use `as_ref()` to access a slice or `into_vec()` to
 obtain a `Vec<u8>`.
 
@@ -124,6 +124,11 @@ Use `Reader::new` for a borrowed byte slice or an owned `Vec<u8>`. Slice readers
 also expose `remaining()`, `has_more()`, and `read_bytes_ref()` for borrowing
 bytes without copying.
 
+For any `Reader<R: Readable>`, `bytes_ref()` optionally exposes unread bytes as
+`BytesView` without advancing the reader. Slice sources return a borrowed
+view (empty at EOF); streams return `None` by default. Custom `Readable` sources
+can implement `bytes_ref()` to provide their own view.
+
 For streams, use `Reader::from_source`. Any `std::io::Read` implementation
 implements `Readable` automatically:
 
@@ -143,6 +148,17 @@ and pass the writer to `Serializable::write`. Implement `Writable::extend_bytes`
 to support another destination; an adapter for `std::io::Write` can forward to
 `write_all` and convert errors with `matriochka::Error::new`. A failed write may
 leave a partially serialized value in the destination.
+
+`Writer::total_written()` counts bytes from successful `push()` and
+`extend_bytes()` calls, including nested serialization. It starts at zero even
+when the sink already contains data. `Writer::pre_allocate()` forwards capacity
+requests to the sink without changing the counter.
+A failed sink call may have written an additional prefix that `Writable` cannot
+report. `Reader` and `Writer` expose their own operations without dereferencing
+to the underlying source or sink. Use `Reader::read_to_end()` to append bytes to
+an existing vector while preserving tracking and error context. Recover the
+source or sink with `into_inner()` or `into_parts()`. `Writer::as_ref()` permits
+sink inspection; explicit writes through `Writer::as_mut()` bypass the counter.
 
 ## Runtime data
 
@@ -183,11 +199,14 @@ failures, or downcast to the original source or sink error type.
 | `BTreeMap<K, V>` | Entry count as `VarUint`, followed by key/value pairs in key order |
 | `BTreeSet<T>` | Element count as `VarUint`, followed by elements in order |
 | `()` | No bytes |
-| `&[u8]`, `bytes::Bytes`, `SerializedBytes` | Raw bytes without a length prefix |
+| `&[u8]`, `bytes::Bytes`, `BytesView` | Raw bytes without a length prefix |
 
-`bytes::Bytes` and `SerializedBytes` decode until the source reaches EOF; use a
-bounded source when embedding them in a larger message. Borrowed `&[u8]` values
-support encoding only. `from_bytes()` decodes one value and does not reject
+`bytes::Bytes` and `BytesView` decode until the source reaches EOF,
+including empty input. `Reader::read_to_end()` succeeds without appending any
+bytes at EOF. Custom sources can override `Readable::read_to_end()` for
+efficient bulk reads; slices and standard I/O sources already do so. Use a
+bounded source when embedding unframed bytes in a larger message. Borrowed
+`&[u8]` values support encoding only. `from_bytes()` decodes one value and does not reject
 trailing bytes; use a slice reader and check `remaining()` when full consumption
 is required.
 

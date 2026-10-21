@@ -1,6 +1,6 @@
 use matriochka::ResultExt;
 
-use crate::{Error, Readable, Reader, Serializable, SerializedBytes, Writable, Writer};
+use crate::{Error, Readable, Reader, Serializable, BytesView, Writable, Writer};
 
 impl<T: Serializable> Serializable for Box<T> {
     fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error> {
@@ -11,7 +11,7 @@ impl<T: Serializable> Serializable for Box<T> {
         reader.read_with_context(|reader| T::read(reader).map(Box::new).context("value"))
     }
 
-    fn to_bytes<'a>(&'a self) -> Result<SerializedBytes<'a>, Error> {
+    fn to_bytes<'a>(&'a self) -> Result<BytesView<'a>, Error> {
         self.as_ref().to_bytes()
     }
 
@@ -38,7 +38,7 @@ mod tests {
 
         let raw = Box::new(::bytes::Bytes::from_static(b"borrowed"));
         let bytes = raw.to_bytes().unwrap();
-        assert!(matches!(bytes, SerializedBytes::Borrowed(_)));
+        assert!(matches!(bytes, BytesView::Borrowed(_)));
         assert_eq!(bytes.as_ref().as_ptr(), raw.as_ref().as_ptr());
     }
 

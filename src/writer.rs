@@ -1,6 +1,6 @@
 use crate::Context;
 use matriochka::{Error, ResultExt};
-use std::{any::type_name, ops::{Deref, DerefMut}};
+use std::any::type_name;
 
 /// Trait for writing serialized data to a byte buffer or stream
 pub trait Writable {
@@ -26,15 +26,43 @@ pub trait Writable {
 pub struct Writer<'ty, 'r, W> {
     sink: W,
     context: Option<Context<'ty, 'r>>,
+    total: usize,
 }
 
 impl<'ty, 'r, W: Writable> Writer<'ty, 'r, W> {
     pub fn new(sink: W) -> Self {
-        Self { sink, context: None }
+        Self { sink, context: None, total: 0 }
     }
 
     pub fn with_context(sink: W, context: impl Into<Option<Context<'ty, 'r>>>) -> Self {
-        Self { sink, context: context.into() }
+        Self { sink, context: context.into(), total: 0 }
+    }
+
+    /// Bytes successfully written through this writer since construction.
+    /// A failed sink call may have written an additional, unreported prefix.
+    /// Direct sink access through `as_mut()` bypasses tracking.
+    pub fn total_written(&self) -> usize {
+        self.total
+    }
+
+    /// Write one byte and update the count on success.
+    pub fn push(&mut self, byte: u8) -> Result<(), Error> {
+        self.sink.push(byte)?;
+        self.total += 1;
+        Ok(())
+    }
+
+    /// Write all bytes and update the count on success.
+    pub fn extend_bytes(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        self.sink.extend_bytes(bytes)?;
+        self.total += bytes.len();
+        Ok(())
+    }
+
+    /// Ask the sink to reserve additional capacity without writing any bytes.
+    /// Returns whether the sink supports pre-allocation.
+    pub fn pre_allocate(&mut self, additional: usize) -> bool {
+        self.sink.pre_allocate(additional)
     }
 
     /// Inspect the context without initializing it.
@@ -68,22 +96,6 @@ impl<'ty, 'r, W: Writable> Writer<'ty, 'r, W> {
 
 }
 
-impl<W> Deref for Writer<'_, '_, W> {
-    type Target = W;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.sink
-    }
-}
-
-impl<W> DerefMut for Writer<'_, '_, W> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.sink
-    }
-}
-
 impl<W> AsRef<W> for Writer<'_, '_, W> {
     #[inline]
     fn as_ref(&self) -> &W {
@@ -92,6 +104,7 @@ impl<W> AsRef<W> for Writer<'_, '_, W> {
 }
 
 impl<W> AsMut<W> for Writer<'_, '_, W> {
+    /// Access the sink directly. Writes through this reference bypass tracking.
     #[inline]
     fn as_mut(&mut self) -> &mut W {
         &mut self.sink
@@ -127,7 +140,7 @@ impl Writable for Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DecodeError, Readable, Reader, Serializable, SerializedBytes, VarUint, WritableBytes};
+    use crate::{DecodeError, Readable, Reader, Serializable, BytesView, VarUint, WritableBytes};
     use bytes::Bytes;
     use std::io::{self, Cursor, ErrorKind, Write};
 
@@ -138,6 +151,40 @@ mod tests {
         fn extend_bytes(&mut self, bytes: &[u8]) -> Result<(), Error> {
             self.0.write_all(bytes).map_err(Error::new)
         }
+    }
+
+    #[test]
+    fn writer_tracks_direct_and_nested_writes() {
+        let mut writer = Writer::with_context(vec![9], Context::new());
+        assert_eq!(writer.total_written(), 0);
+        assert!(writer.pre_allocate(32));
+        writer.extend_bytes(&[]).unwrap();
+        assert_eq!(writer.total_written(), 0);
+
+        writer.push(1).unwrap();
+        writer.extend_bytes(&[2, 3]).unwrap();
+        assert_eq!(writer.total_written(), 3);
+
+        let value = Some(vec![253u64, 300]);
+        value.write(&mut writer).unwrap();
+        assert_eq!(writer.total_written(), 3 + value.size());
+        let (bytes, context) = writer.into_parts();
+        let mut expected = vec![9, 1, 2, 3];
+        expected.extend_from_slice(value.to_bytes().unwrap().as_ref());
+        assert_eq!(bytes, expected);
+        assert!(context.is_some());
+    }
+
+    #[test]
+    fn writer_tracks_completed_calls_when_a_sink_partially_fails() {
+        let mut buffer = [0; 3];
+        let mut writer = Writer::new(IoWriter(Cursor::new(buffer.as_mut_slice())));
+        assert_eq!(writer.total_written(), 0);
+        writer.push(9).unwrap();
+        let error = writer.extend_bytes(&[1, 2, 3]).unwrap_err();
+        assert_eq!(error.downcast_ref::<io::Error>().unwrap().kind(), ErrorKind::WriteZero);
+        assert_eq!(writer.total_written(), 1);
+        assert_eq!(writer.into_inner().0.into_inner(), &[9, 1, 2]);
     }
 
     #[test]
@@ -184,16 +231,17 @@ mod tests {
     #[test]
     fn io_writer_handles_partial_and_interrupted_writes() {
         let value = 0x0102030405060708u64;
-        let mut writer = IoWriter(PartialWriter {
+        let mut writer = Writer::new(IoWriter(PartialWriter {
             buffer: [0; 32],
             written: 0,
             interrupt: true,
-        });
+        }));
 
-        value.write(&mut Writer::new(&mut writer)).unwrap();
+        value.write(&mut writer).unwrap();
 
-        assert_eq!(writer.0.written, 8);
-        assert_eq!(&writer.0.buffer[..8], &value.to_be_bytes());
+        assert_eq!(writer.total_written(), 8);
+        assert_eq!(writer.as_ref().0.written, 8);
+        assert_eq!(&writer.as_ref().0.buffer[..8], &value.to_be_bytes());
     }
 
     fn assert_io_failure<T: Serializable>(value: T) {
@@ -219,7 +267,7 @@ mod tests {
         assert_io_failure("hello".to_owned());
         assert_io_failure(&b"hello"[..]);
         assert_io_failure(Bytes::from_static(b"hello"));
-        assert_io_failure(SerializedBytes::Borrowed(b"hello"));
+        assert_io_failure(BytesView::Borrowed(b"hello"));
         assert_io_failure(WritableBytes(b"hello"));
         assert_io_failure(Some(vec![1u64, 2]));
 
@@ -249,16 +297,17 @@ mod tests {
 
     #[test]
     fn composite_serialization_stops_at_the_first_failed_write() {
-        let mut writer = RejectSecondWrite { calls: 0 };
+        let mut writer = Writer::new(RejectSecondWrite { calls: 0 });
 
-        let error = Some(vec![1u64, 2]).write(&mut Writer::new(&mut writer)).unwrap_err();
+        let error = Some(vec![1u64, 2]).write(&mut writer).unwrap_err();
 
         assert!(error.downcast_ref::<SinkRejected>().is_some());
         assert_eq!(
             format!("{error:#}"),
             "writing core::option::Option<alloc::vec::Vec<u64>>: Some: writing alloc::vec::Vec<u64>: length: writing octet::varuint::VarUint: prefix: writing collection length: sink rejected write"
         );
-        assert_eq!(writer.calls, 2);
+        assert_eq!(writer.total_written(), 1);
+        assert_eq!(writer.as_ref().calls, 2);
     }
 
     #[test]

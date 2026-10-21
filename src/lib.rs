@@ -30,7 +30,7 @@ pub use runtime_context::{self, Context};
 pub use reader::{DecodeError, Readable, Reader, SliceSource};
 pub use writable::WritableBytes;
 pub use varuint::VarUint;
-pub use bytes::SerializedBytes;
+pub use bytes::BytesView;
 
 /// Trait for types that can be serialized and deserialized as binary data
 pub trait Serializable {
@@ -41,11 +41,11 @@ pub trait Serializable {
     fn write<W: Writable>(&self, writer: &mut Writer<W>) -> Result<(), Error>;
 
     /// Serialize to bytes
-    fn to_bytes<'a>(&'a self) -> Result<SerializedBytes<'a>, Error> {
+    fn to_bytes<'a>(&'a self) -> Result<BytesView<'a>, Error> {
         let mut writer = Writer::new(Vec::with_capacity(self.size()));
         self.write(&mut writer)
             .with_context(|| format!("serializing {}", type_name::<Self>()))?;
-        Ok(SerializedBytes::Owned(writer.into_inner().into_boxed_slice()))
+        Ok(BytesView::Owned(writer.into_inner().into_boxed_slice()))
     }
 
     /// Serialize to a lowercase hexadecimal string without a prefix.

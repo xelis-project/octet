@@ -1,6 +1,6 @@
 use matriochka::ResultExt;
 
-use crate::{DecodeError, Error, Readable, Reader, Serializable, SerializedBytes, Writable, Writer};
+use crate::{DecodeError, Error, Readable, Reader, Serializable, BytesView, Writable, Writer};
 
 macro_rules! impl_serializable_fixed_width {
     ($($ty:ty => $size:expr),+) => {
@@ -12,8 +12,8 @@ macro_rules! impl_serializable_fixed_width {
                     })
                 }
 
-                fn to_bytes<'a>(&'a self) -> Result<SerializedBytes<'a>, Error> {
-                    Ok(SerializedBytes::Owned(Box::new(self.to_be_bytes())))
+                fn to_bytes<'a>(&'a self) -> Result<BytesView<'a>, Error> {
+                    Ok(BytesView::Owned(Box::new(self.to_be_bytes())))
                 }
 
                 fn read<R: Readable>(reader: &mut Reader<R>) -> Result<Self, Error> {
