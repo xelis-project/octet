@@ -59,7 +59,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "octet"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "hex",
@@ -72,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "octet-derive"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
